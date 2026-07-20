@@ -1,98 +1,108 @@
-# Amyloid Plaque Morphology Classifier
+# Amyloid plaque morphology classifier
 
-I built this to classify the morphology of amyloid plaques in fluorescence microscopy. Given an image it finds each plaque and sorts it into one of the three shapes pathologists describe, Diffuse, DenseCore, and Compact. It also places every plaque on a 2D morphology continuum so I can look at the whole population instead of only the discrete labels.
+Finds amyloid plaques in fluorescence microscopy and sorts each one by shape into the
+three morphologies pathologists name — Diffuse, DenseCore, and Compact. It also drops
+every plaque onto a 2D morphology map, so I can look at the whole population as a
+continuum instead of three hard bins, which is closer to how the plaques actually behave.
 
-The repository ships with a synthetic data generator, so the whole pipeline runs end to end without any real microscopy. I swap in real images and labels when I want to run it for real.
+## Pipeline
 
-## How it works
+Four stages, image to label.
 
-The pipeline has four stages.
+1. **Segmentation** (`plaque_classifier/segmentation.py`): a double band-pass filter
+   rejects slow tissue-level intensity drift and locks onto plaque-sized objects, then a
+   watershed splits plaques that touch.
+2. **Not-plaque filter** (`plaque_classifier/cnn.py`): a ResNet50 makes the plaque /
+   not-plaque call and throws out the vessels, tissue folds, and debris the segmenter also
+   grabs. The only stage that needs PyTorch.
+3. **Features** (`plaque_classifier/features.py`): 47 engineered morphology features per
+   object: intensity statistics, texture, the radial intensity profile, shape, and a few
+   compound features I added to hand a linear model the core-versus-halo signal it can't
+   build on its own.
+4. **Classification** (`plaque_classifier/classifier.py`): an LDA assigns the class and
+   gives the 2D projection. I read LD1 as a maturity axis, Diffuse through Compact, and LD2
+   as coredness.
 
-- Segmentation. I use a double band-pass filter to reject slow tissue-level intensity changes and lock onto plaque-sized objects, then a watershed to split plaques that touch. This lives in `plaque_classifier/segmentation.py`.
-- Not-plaque filter. A ResNet50 decides plaque versus not-plaque and drops the vessels, tissue folds, and debris that the segmenter also picks up. This is the only stage that needs PyTorch, and it lives in `plaque_classifier/cnn.py`.
-- Feature extraction. I compute 47 engineered morphology features per object. They cover intensity statistics, texture, the radial intensity profile, object shape, and a handful of compound features I added to hand a linear model the core-versus-halo signal it cannot learn on its own. This lives in `plaque_classifier/features.py`.
-- Classification. A Linear Discriminant Analysis assigns the class and gives the 2D projection, where I read LD1 as a maturity axis running from Diffuse to Compact and LD2 as a coredness axis. This lives in `plaque_classifier/classifier.py`.
+The shape call goes to engineered features and a linear model, rather than a second CNN,
+because I want to be able to point at *why* a plaque was called Compact. Every one of the
+47 features has a physical meaning, and the LDA weights tell me which ones drove each
+class. The CNN only handles the coarse plaque/not-plaque split, where the decision is easy
+and there's nothing subtle to explain.
 
-I keep the feature set honest by ranking every feature with an ANOVA F-test and with mutual information, then running greedy forward selection under image-level cross validation. That code is in `scripts/evaluate_features.py`.
+Feature selection is deliberate. Each feature gets ranked by ANOVA F-test and by mutual
+information, then greedy forward selection runs under image-level cross-validation
+(`scripts/evaluate_features.py`). And every split (training, CV, evaluation) is grouped
+by source image, so tiles from one slide never land in both folds. Skip that and the
+accuracy number is fiction.
 
-## Why this design
-
-I wanted a classifier I can fully explain. A pure CNN would be a black box, so I use the CNN only for the easy plaque versus not-plaque call, where I do not need to explain much, and I hand the subtle morphology decision to engineered features plus a linear model. Every feature has a physical meaning, and the LDA weights show me which features drive each class. The same LDA gives the continuum, which matches how these plaques really behave, where the shapes grade into each other rather than falling into clean bins.
-
-Cross validation is grouped by source image everywhere, so tiles from one image never land in both the train fold and the test fold. That is the part that keeps the reported accuracy honest.
-
-## Repo layout
-
-```
-plaque_classifier/
-    features.py       engineered morphology features (47 per object)
-    segmentation.py   candidate detection, tile extraction, overlay rendering
-    classifier.py     LDA training, 2D continuum, save and load, prediction
-    cnn.py            binary plaque / not-plaque ResNet50 (needs PyTorch)
-    synthetic.py      synthetic plaque and image generator
-    pipeline.py       whole-image prediction (segment, filter, features, classify)
-scripts/
-    make_synthetic_data.py   build the synthetic tiles and images
-    train.py                 train the LDA morphology classifier
-    predict.py               classify plaques in whole images
-    evaluate_pipeline.py     score the whole pipeline against ground truth
-    evaluate_features.py     feature ranking and forward selection
-    train_cnn.py             train the binary ResNet50 (needs PyTorch)
-```
-
-## Install
+## Running the demo
 
 ```
 pip install -r requirements.txt
 ```
 
-The core pipeline needs numpy, scipy, scikit-image, scikit-learn, pandas, matplotlib, Pillow, and tifffile. The not-plaque CNN also needs torch and torchvision, which I left commented out in `requirements.txt` because they are heavy and nothing else in the pipeline depends on them.
+The core pipeline needs numpy, scipy, scikit-image, scikit-learn, pandas, matplotlib,
+Pillow, and tifffile. torch and torchvision are commented out in `requirements.txt` —
+they're heavy and only the CNN stage touches them.
 
-## Run the synthetic demo
-
-First I generate the synthetic tiles and whole images.
+Build the synthetic tiles and whole images, train the LDA on the tiles, then predict on
+the images:
 
 ```
 python scripts/make_synthetic_data.py --out data
-```
-
-Then I train the morphology classifier on the tiles. The run prints a cross-validated report so I can see how well the three classes separate.
-
-```
 python scripts/train.py --data data --out models/morphology_lda.pkl
-```
-
-Then I predict on the whole synthetic images. This writes one row per plaque, a per-image summary, an overlay for each image, and a scatter of the morphology continuum.
-
-```
 python scripts/predict.py --images data/images --model models/morphology_lda.pkl --out predictions
 ```
 
-The tile training run scores the classifier on its own. To score the whole pipeline end to end, segmentation and features and classification together, I match predictions against the ground truth that the generator wrote and report detection recall plus the morphology confusion. This is the honest end-to-end number.
+`train.py` prints a cross-validated report on how well the three classes separate.
+`predict.py` writes one row per plaque, a per-image summary, an overlay, and a scatter of
+the continuum. The synthetic generator (`plaque_classifier/synthetic.py`) is what lets this
+run end to end on a clean machine; swap in real tiles and a `labels.csv` and nothing else
+changes.
+
+For the real end-to-end number — segmentation, features, and classification scored
+together against the generator's ground truth, reported as detection recall plus the
+morphology confusion:
 
 ```
 python scripts/evaluate_pipeline.py --images data/images --model models/morphology_lda.pkl --truth data/images_truth.csv
 ```
 
-To reproduce the feature ranking and the forward selection I run this.
-
-```
-python scripts/evaluate_features.py --data data
-```
-
-The CNN stage is optional and needs PyTorch. Once torch is installed I train the filter and then switch it on during prediction.
+The CNN filter is optional. Once torch is in, train it and switch it on at predict time:
 
 ```
 python scripts/train_cnn.py --data data --out models/binary_cnn_resnet50.pth
 python scripts/predict.py --images data/images --model models/morphology_lda.pkl --out predictions --cnn models/binary_cnn_resnet50.pth
 ```
 
-## Using my own data
+## Your own data
 
-For training I point `--data` at a folder that holds a `tiles` subfolder and a `labels.csv`. The CSV has one row per tile, a column named `tile` with the image filename, a column named `label` with one of Diffuse, DenseCore, Compact, or NotPlaque, and an optional column named `image` naming the source slide so the cross-validation splits stay grouped. Each tile is a single centered object.
+Training wants a folder with a `tiles/` subfolder and a `labels.csv`: one row per tile, a
+`tile` column with the filename, a `label` column (Diffuse, DenseCore, Compact, or
+NotPlaque), and an optional `image` column naming the source slide so the CV grouping
+holds. One centered object per tile.
 
-For prediction I point `--images` at a folder of whole images. TIFF and PNG both work, and a multi-page TIFF is max-projected. Object size limits and the segmentation scales are set in microns, so I pass `--px_um` with the microns per pixel of my objective. Objects between 10 and 200 microns equivalent diameter are kept.
+Prediction wants a folder of whole images. TIFF and PNG both work, and a multi-page TIFF is
+max-projected. Object size limits and the segmentation scales are in microns, so pass
+`--px_um` with your objective's microns-per-pixel; objects between 10 and 200 µm equivalent
+diameter are kept. The 47 features and the LDA carry from synthetic to real unchanged — the
+one piece worth retraining on real tiles is the binary CNN.
 
-## Running it on real data
+## Layout
 
-The synthetic set is only there so the pipeline runs out of the box. On real data I point the loader at my own images and labels, set `--px_um` to my microscope calibration, and retrain the binary CNN on real tiles. The 47 morphology features and the LDA carry over unchanged.
+```
+plaque_classifier/
+    features.py       47 morphology features per object
+    segmentation.py   candidate detection, tile extraction, overlays
+    classifier.py     LDA training, 2D continuum, save/load, prediction
+    cnn.py            binary plaque / not-plaque ResNet50 (needs PyTorch)
+    synthetic.py      synthetic plaque and image generator
+    pipeline.py       whole-image prediction, end to end
+scripts/
+    make_synthetic_data.py   build the synthetic tiles and images
+    train.py                 train the LDA
+    predict.py               classify plaques in whole images
+    evaluate_pipeline.py     score the whole pipeline against ground truth
+    evaluate_features.py     feature ranking and forward selection
+    train_cnn.py             train the ResNet50 (needs PyTorch)
+```
