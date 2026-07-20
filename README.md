@@ -1,8 +1,8 @@
 # Amyloid plaque morphology classifier
 
 Finds amyloid plaques in fluorescence microscopy and sorts each one by shape into the
-three morphologies pathologists name — Diffuse, DenseCore, and Compact. It also drops
-every plaque onto a 2D morphology map, so I can look at the whole population as a
+three morphologies: Diffuse, DenseCore, and Compact. It also drops
+every plaque onto a 2D morphology map to look at the whole population as a
 continuum instead of three hard bins, which is closer to how the plaques actually behave.
 
 ## Pipeline
@@ -13,12 +13,11 @@ Four stages, image to label.
    rejects slow tissue-level intensity drift and locks onto plaque-sized objects, then a
    watershed splits plaques that touch.
 2. **Not-plaque filter** (`plaque_classifier/cnn.py`): a ResNet50 makes the plaque /
-   not-plaque call and throws out the vessels, tissue folds, and debris the segmenter also
-   grabs. The only stage that needs PyTorch.
+   not-plaque determination and throws out the vessels, tissue folds, and debris the segmenter also
+   grabs. 
 3. **Features** (`plaque_classifier/features.py`): 47 engineered morphology features per
    object: intensity statistics, texture, the radial intensity profile, shape, and a few
-   compound features I added to hand a linear model the core-versus-halo signal it can't
-   build on its own.
+   compound features.
 4. **Classification** (`plaque_classifier/classifier.py`): an LDA assigns the class and
    gives the 2D projection. I read LD1 as a maturity axis, Diffuse through Compact, and LD2
    as coredness.
