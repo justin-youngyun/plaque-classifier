@@ -1,0 +1,21 @@
+# Generated synthetic data, trained models, and prediction outputs
+data/
+models/
+predictions/
+*.pth
+*.pkl
+*.tif
+*.tiff
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

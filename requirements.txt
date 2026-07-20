@@ -1,0 +1,15 @@
+# Core pipeline (feature extraction, segmentation, LDA). All of these are enough
+# to run make_synthetic_data.py, train.py, predict.py, and evaluate_features.py.
+numpy>=1.24
+scipy>=1.11
+scikit-image>=0.21
+scikit-learn>=1.3
+pandas>=2.0
+matplotlib>=3.7
+Pillow>=10.0
+tifffile>=2023.7
+
+# CNN not-plaque filter only (train_cnn.py and predict.py --cnn). Heavy, so it is
+# optional. Install these two if you want the CNN stage.
+# torch>=2.0
+# torchvision>=0.15
